@@ -9,19 +9,24 @@ from chat.servidor import GestorChat, RegistroClientes, ServidorChat
 
 
 def main() -> None:
+    """Configura el servidor y deja la aceptación de clientes en ejecución."""
+    # 0.0.0.0 escucha en todas las interfaces IPv4 disponibles del equipo.
     parser = argparse.ArgumentParser(description="Servidor del chat multiusuario LAN")
     parser.add_argument("--host", default="0.0.0.0", help="IP para escuchar; 0.0.0.0 habilita LAN")
     parser.add_argument("--puerto", type=int, default=8080, help="Puerto TCP (predeterminado: 8080)")
     argumentos = parser.parse_args()
 
     configurar_logs("servidor")
+    # El gestor recibe por separado el registro de usuarios y el formato visual.
     gestor = GestorChat(RegistroClientes(), FormateadorConsola())
     try:
         ServidorChat(argumentos.host, argumentos.puerto, gestor).iniciar()
     except OSError as error:
+        # Un puerto ocupado o una dirección no disponible impiden el arranque.
         logging.getLogger(__name__).error("No se pudo iniciar el servidor: %s", error)
         raise SystemExit(1) from error
 
 
 if __name__ == "__main__":
+    # Importar este módulo no inicia el servidor automáticamente.
     main()

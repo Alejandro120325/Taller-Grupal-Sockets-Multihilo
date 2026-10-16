@@ -1,0 +1,82 @@
+
+# ==================================================
+# PROYECTO: CHAT MULTIUSUARIO LAN
+# MATERIA: SISTEMAS DISTRIBUIDOS
+# ==================================================
+
+# 1. Python - Archivos temporales
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# 2. Entornos virtuales
+.venv/
+venv/
+env/
+ENV/
+virtualenv/
+
+# 3. Editores e IDE
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+*~
+
+# 4. Variables de entorno y secretos
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# 5. Logs del sistema
+logs/
+*.log
+*.log.*
+*.out
+
+# 6. Archivos de pruebas
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.tox/
+.nox/
+.hypothesis/
+
+# 7. Herramientas de calidad de codigo
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.pytype/
+
+# 8. Compilaciones y distribuciones
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+*.whl
+
+# 9. Documentacion generada
+docs/_build/
+site/
+
+# 10. Archivos temporales del sistema
+.DS_Store
+Thumbs.db
+desktop.ini
+*.tmp
+*.temp
+*.bak
+
+# 11. Archivos locales de bases de datos
+*.sqlite3
+*.db
+
+# 12. Archivos locales de configuracion
+.python-version.local

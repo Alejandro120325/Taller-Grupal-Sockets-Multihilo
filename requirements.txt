@@ -1,0 +1,2 @@
+# Mantiene el texto escrito mientras llegan mensajes de otros usuarios.
+prompt_toolkit>=3.0,<4.0

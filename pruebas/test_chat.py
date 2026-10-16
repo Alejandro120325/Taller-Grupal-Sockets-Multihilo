@@ -15,16 +15,22 @@ RAIZ = Path(__file__).resolve().parent.parent
 
 
 class PruebasUnitarias(unittest.TestCase):
+    """Verifica formato y protocolo sin iniciar un servidor."""
+
     def test_formato(self):
+        """Comprueba la representación que verán los usuarios."""
         self.assertEqual(FormateadorConsola().formatear("Ana", "Hola"), "[Ana]: Hola")
 
     def test_dos_eventos_consecutivos_en_tcp(self):
+        """Comprueba que dos eventos juntos se puedan leer por separado."""
+        # StringIO simula el lector de texto del socket con dos líneas seguidas.
         contenido = codificar_evento("mensaje", texto="uno") + codificar_evento("mensaje", texto="dos")
         flujo = io.StringIO(contenido.decode("utf-8"))
         self.assertEqual(leer_evento(flujo)["texto"], "uno")
         self.assertEqual(leer_evento(flujo)["texto"], "dos")
 
     def test_validacion(self):
+        """Comprueba la limpieza de espacios y el rechazo de entradas inválidas."""
         self.assertEqual(validar_alias("  Ana  "), "Ana")
         self.assertEqual(validar_texto(" Hola "), "Hola")
         with self.assertRaises(ValueError):
@@ -34,9 +40,14 @@ class PruebasUnitarias(unittest.TestCase):
 
 
 class PruebasIntegracion(unittest.TestCase):
+    """Ejercita el servidor real con clientes TCP creados por las pruebas."""
+
     @classmethod
     def setUpClass(cls):
+        """Inicia un servidor compartido por los casos de esta clase."""
         with socket.socket() as temporal:
+            # El puerto 0 pide al sistema uno libre; se libera antes de iniciar
+            # el servidor, que intentará ocupar ese mismo número de puerto.
             temporal.bind(("127.0.0.1", 0))
             cls.puerto = temporal.getsockname()[1]
         cls.proceso = subprocess.Popen(
@@ -45,6 +56,8 @@ class PruebasIntegracion(unittest.TestCase):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
+        # Reintenta brevemente hasta que el proceso acepte conexiones.
+        # La conexión de sondeo se cierra sin registrar ningún usuario.
         for _ in range(50):
             try:
                 with socket.create_connection(("127.0.0.1", cls.puerto), timeout=0.2):
@@ -56,14 +69,17 @@ class PruebasIntegracion(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        """Detiene el proceso del servidor al finalizar la clase."""
         cls.proceso.terminate()
         try:
             cls.proceso.wait(timeout=3)
         except subprocess.TimeoutExpired:
+            # Si no termina a tiempo, fuerza el cierre y recoge el proceso.
             cls.proceso.kill()
             cls.proceso.wait()
 
     def test_dos_usuarios_conversan_y_se_desconectan(self):
+        """Verifica ingreso, difusión a ambos usuarios y salida voluntaria."""
         with socket.create_connection(("127.0.0.1", self.puerto), timeout=3) as uno, \
                 socket.create_connection(("127.0.0.1", self.puerto), timeout=3) as dos:
             uno.settimeout(3)
@@ -71,12 +87,14 @@ class PruebasIntegracion(unittest.TestCase):
             with uno.makefile("r", encoding="utf-8") as leer_uno, \
                     dos.makefile("r", encoding="utf-8") as leer_dos:
                 uno.sendall(codificar_evento("ingreso", alias="Ana"))
+                # Se consumen los avisos de ingreso antes de comprobar mensajes.
                 self.assertEqual(leer_evento(leer_uno)["tipo"], "sistema")
                 dos.sendall(codificar_evento("ingreso", alias="Luis"))
                 self.assertIn("Luis se conectó", leer_evento(leer_uno)["contenido"])
                 self.assertEqual(leer_evento(leer_dos)["tipo"], "sistema")
 
                 uno.sendall(codificar_evento("mensaje", texto="Hola a todos"))
+                # La difusión incluye al emisor, que también recibe su mensaje.
                 self.assertEqual(leer_evento(leer_uno)["contenido"], "[Ana]: Hola a todos")
                 self.assertEqual(leer_evento(leer_dos)["contenido"], "[Ana]: Hola a todos")
 
@@ -89,6 +107,7 @@ class PruebasIntegracion(unittest.TestCase):
                 uno.sendall(codificar_evento("salida"))
 
     def test_cierre_imprevisto_de_un_cliente(self):
+        """Verifica que un corte de conexión no impida conversar al otro usuario."""
         with socket.create_connection(("127.0.0.1", self.puerto), timeout=3) as uno:
             uno.settimeout(3)
             with uno.makefile("r", encoding="utf-8") as lectura:
@@ -105,6 +124,7 @@ class PruebasIntegracion(unittest.TestCase):
                 uno.sendall(codificar_evento("salida"))
 
     def test_alias_duplicado_se_rechaza(self):
+        """Comprueba que el segundo cliente reciba el motivo del rechazo."""
         with socket.create_connection(("127.0.0.1", self.puerto), timeout=3) as uno, \
                 socket.create_connection(("127.0.0.1", self.puerto), timeout=3) as dos:
             uno.settimeout(3)

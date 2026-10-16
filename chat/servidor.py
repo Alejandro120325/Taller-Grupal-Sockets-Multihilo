@@ -22,6 +22,7 @@ class SesionCliente:
     conexion: socket.socket
     direccion: tuple
     alias: str
+    # Cada sesión tiene su propio candado: los envíos a otros clientes son independientes.
     candado_envio: threading.Lock = field(default_factory=threading.Lock)
 
     def enviar(self, paquete: bytes) -> None:
@@ -34,6 +35,7 @@ class SesionCliente:
         try:
             self.conexion.shutdown(socket.SHUT_RDWR)
         except OSError:
+            # Es normal que el otro extremo ya haya cerrado la conexión.
             pass
         try:
             self.conexion.close()
@@ -45,20 +47,28 @@ class RegistroClientes:
     """Gestiona de manera segura el conjunto de usuarios conectados."""
 
     def __init__(self) -> None:
+        """Crea el registro compartido por todos los hilos de atención."""
         self._sesiones: dict[socket.socket, SesionCliente] = {}
         self._candado = threading.Lock()
 
     def registrar(self, sesion: SesionCliente) -> None:
+        """Añade la sesión si su alias no está en uso, sin distinguir mayúsculas."""
         with self._candado:
+            # La comprobación y el alta comparten candado para evitar que dos
+            # hilos registren el mismo alias al mismo tiempo.
             if any(otra.alias.casefold() == sesion.alias.casefold() for otra in self._sesiones.values()):
                 raise ValueError("Ese alias ya está conectado. Escoge otro.")
             self._sesiones[sesion.conexion] = sesion
 
     def quitar(self, sesion: SesionCliente) -> bool:
+        """Elimina una sesión y devuelve si todavía estaba registrada."""
         with self._candado:
             return self._sesiones.pop(sesion.conexion, None) is not None
 
     def obtener_todos(self) -> list[SesionCliente]:
+        """Devuelve una copia de las sesiones presentes en este momento."""
+        # La copia permite enviar fuera del candado del registro: una operación
+        # de red lenta no bloquea las altas y bajas de usuarios.
         with self._candado:
             return list(self._sesiones.values())
 
@@ -67,16 +77,19 @@ class GestorChat:
     """Coordina mensajes sin controlar los sockets de escucha."""
 
     def __init__(self, registro: RegistroClientes, formateador: FormateadorMensaje) -> None:
+        """Recibe los componentes que almacenan sesiones y presentan mensajes."""
         self._registro = registro
         self._formateador = formateador
 
     @property
     def registro(self) -> RegistroClientes:
+        """Expone el registro para dar de alta y retirar las sesiones."""
         return self._registro
 
     def difundir(self, tipo: str, contenido: str) -> None:
         """Distribuye el evento a todos los clientes activos, incluido el emisor."""
         paquete = codificar_evento(tipo, contenido=contenido)
+        # El mismo evento se codifica una sola vez y se reutiliza para cada envío.
         for sesion in self._registro.obtener_todos():
             try:
                 sesion.enviar(paquete)
@@ -86,6 +99,7 @@ class GestorChat:
                 sesion.cerrar()
 
     def publicar_mensaje(self, alias: str, texto: str) -> None:
+        """Aplica el formato visible y distribuye el mensaje a la conversación."""
         contenido = self._formateador.formatear(alias, texto)
         self.difundir("mensaje", contenido)
         REGISTRO.info("Mensaje difundido | emisor=%s | longitud=%s", alias, len(texto))
@@ -95,12 +109,16 @@ class AtendedorCliente:
     """Se ocupa del ciclo de vida de un cliente particular."""
 
     def __init__(self, gestor: GestorChat) -> None:
+        """Comparte el mismo gestor entre todos los clientes atendidos."""
         self._gestor = gestor
 
     def atender(self, conexion: socket.socket, direccion: tuple) -> None:
+        """Identifica al usuario, procesa sus eventos y retira su sesión al salir."""
+        # Puede fallar el ingreso antes de registrar una sesión válida.
         sesion: SesionCliente | None = None
         REGISTRO.info("Conexión TCP desde %s:%s", *direccion[:2])
         try:
+            # Los contextos cierran el socket y su lector incluso si ocurre un error.
             with conexion, conexion.makefile("r", encoding="utf-8") as flujo:
                 ingreso = leer_evento(flujo)
                 if ingreso is None or ingreso.get("tipo") != "ingreso":
@@ -112,12 +130,15 @@ class AtendedorCliente:
                 except ValueError as error:
                     # Enviamos el motivo al cliente antes de cerrar el socket.
                     conexion.sendall(codificar_evento("error", contenido=str(error)))
+                    # Un ingreso rechazado no debe generar un aviso de salida.
                     sesion = None
                     raise
                 REGISTRO.info("Ingresó al chat | usuario=%s | ip=%s | puerto=%s", alias, *direccion[:2])
                 self._gestor.difundir("sistema", f"{alias} se conectó al chat.")
 
                 while True:
+                    # La espera afecta solo al hilo de este cliente; los demás
+                    # continúan conversando mientras aquí no llegan datos.
                     evento = leer_evento(flujo)
                     if evento is None or evento["tipo"] == "salida":
                         break
@@ -130,6 +151,8 @@ class AtendedorCliente:
         except Exception:
             REGISTRO.exception("Error inesperado con %s:%s", *direccion[:2])
         finally:
+            # Se retira al usuario tanto por /salir como por un cierre inesperado.
+            # quitar devuelve False si ya no estaba, evitando avisos duplicados.
             if sesion is not None and self._gestor.registro.quitar(sesion):
                 REGISTRO.info("Salió del chat | usuario=%s | ip=%s | puerto=%s", sesion.alias, *direccion[:2])
                 self._gestor.difundir("sistema", f"{sesion.alias} salió del chat.")
@@ -143,6 +166,7 @@ class ServidorChat:
     """Únicamente abre el puerto TCP y distribuye las conexiones entre hilos."""
 
     def __init__(self, host: str, puerto: int, gestor: GestorChat) -> None:
+        """Guarda la dirección de escucha y prepara el atendedor compartido."""
         self._host = host
         self._puerto = puerto
         self._atendedor = AtendedorCliente(gestor)
@@ -150,19 +174,25 @@ class ServidorChat:
     def iniciar(self) -> None:
         """Acepta clientes hasta que se interrumpa el proceso con Ctrl+C."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as servidor:
+            # AF_INET selecciona IPv4 y SOCK_STREAM utiliza una conexión TCP.
+            # SO_REUSEADDR solicita reutilizar la dirección según las reglas del sistema.
             servidor.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             servidor.bind((self._host, self._puerto))
+            # 20 es la cola de conexiones pendientes de aceptar, no un límite de usuarios.
             servidor.listen(20)
             REGISTRO.info("Servidor de chat activo en %s:%s", self._host, self._puerto)
             try:
                 while True:
                     conexion, direccion = servidor.accept()
+                    # accept entrega un socket nuevo por cliente. El socket servidor
+                    # queda libre para aceptar las siguientes conexiones.
                     hilo = threading.Thread(
                         target=self._atendedor.atender,
                         args=(conexion, direccion),
                         name=f"cliente-{direccion[0]}-{direccion[1]}",
                         daemon=True,
                     )
+                    # Los hilos daemon terminan cuando finaliza el proceso principal.
                     hilo.start()
             except KeyboardInterrupt:
                 REGISTRO.info("Servidor detenido mediante Ctrl+C.")

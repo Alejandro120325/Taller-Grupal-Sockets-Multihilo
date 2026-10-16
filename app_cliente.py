@@ -12,6 +12,8 @@ from chat.registros import configurar_logs
 
 
 def main() -> None:
+    """Lee la configuración, conecta al usuario y procesa lo que escribe."""
+    # Por defecto se conecta al mismo equipo; --host permite usar otro en la LAN.
     parser = argparse.ArgumentParser(description="Cliente del chat multiusuario LAN")
     parser.add_argument("--host", default="127.0.0.1", help="IP real del equipo servidor en la LAN")
     parser.add_argument("--puerto", type=int, default=8080, help="Puerto TCP del servidor")
@@ -19,6 +21,7 @@ def main() -> None:
 
     configurar_logs("cliente")
     sesion = PromptSession()
+    # Validar antes de conectar evita abrir un socket para un nombre inválido.
     try:
         alias = validar_alias(sesion.prompt("Tu nombre para el chat: "))
     except (ValueError, KeyboardInterrupt, EOFError) as error:
@@ -39,6 +42,7 @@ def main() -> None:
                     break
                 if texto.strip().lower() == "/salir":
                     break
+                # Una línea vacía no se envía; el usuario puede seguir escribiendo.
                 if not texto.strip():
                     continue
                 try:
@@ -55,9 +59,11 @@ def main() -> None:
         logging.getLogger(__name__).error("No fue posible conectarse: %s", error)
         print("Comprueba la IP, el puerto, el firewall y que el servidor esté iniciado.")
     finally:
+        # Se liberan los recursos tanto al salir como ante un fallo de conexión.
         cliente.desconectar()
         print("Chat finalizado.")
 
 
 if __name__ == "__main__":
+    # Ejecuta la aplicación solo al abrir este archivo como programa.
     main()
